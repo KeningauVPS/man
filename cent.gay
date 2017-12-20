@@ -1,0 +1,242 @@
+#!/bin/bash
+
+#Requirement
+if [ ! -e /usr/bin/curl ]; then
+   yum -y update && yum -y upgrade
+   yum -y install curl
+fi
+
+# initialisasi var
+OS=`uname -m`;
+MYIP=$(curl -4 icanhazip.com)
+if [ $MYIP = "" ]; then
+   MYIP=`ifconfig | grep 'inet addr:' | grep -v inet6 | grep -vE '127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | cut -d: -f2 | awk '{ print $1}' | head -1`;
+fi
+MYIP2="s/xxxxxxxxx/$MYIP/g";
+
+# disable ipv6
+echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
+sed -i '$ i\echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6' /etc/rc.local
+sed -i '$ i\echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6' /etc/rc.d/rc.local
+
+#Add DNS Server ipv4
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+sed -i '$ i\echo "nameserver 8.8.8.8" > /etc/resolv.conf' /etc/rc.local
+sed -i '$ i\echo "nameserver 8.8.4.4" >> /etc/resolv.conf' /etc/rc.local
+sed -i '$ i\echo "nameserver 8.8.8.8" > /etc/resolv.conf'  /etc/rc.d/rc.local
+sed -i '$ i\echo "nameserver 8.8.4.4" >> /etc/resolv.conf'  /etc/rc.d/rc.local
+
+# install wget and curl
+yum -y install wget curl
+
+# setting repo
+rpm -Uvh http://dl.fedoraproject.org/pub/epel/7/x86_64/e/epel-release-7-7.noarch.rpm
+rpm -Uvh http://rpms.famillecollet.com/enterprise/remi-release-7.rpm
+#rpm -Uvh http://pkgs.repoforge.org/rpmforge-release/rpmforge-release-0.5.3-1.el7.rf.x86_64.rpm
+
+sed -i -e "/^\[remi\]/,/^\[.*\]/ s|^\(enabled[ \t]*=[ \t]*0\\)|enabled=1|" /etc/yum.repos.d/remi.repo
+rm -f *.rpm
+
+# install 
+yum -y install squid nano epel-release dropbear
+chkconfig squid on
+
+# disable ping flood
+sed -i '$ a net.ipv4.icmp_echo_ignore_all = 1' /etc/sysctl.conf
+sysctl -p
+
+# set locale
+sed -i 's/AcceptEnv/#AcceptEnv/g' /etc/ssh/sshd_config
+service sshd restart
+
+# install webserver
+cd
+wget -O /etc/nginx/nginx.conf "https://my.rzvpn.net/random/nginx.conf"
+sed -i 's/www-data/nginx/g' /etc/nginx/nginx.conf
+mkdir -p /home/vps/public_html
+echo "<pre>Setup by Fawzya.Net</pre>" > /home/vps/public_html/index.html
+echo "<?php phpinfo(); ?>" > /home/vps/public_html/info.php
+rm /etc/nginx/conf.d/*
+wget -O /etc/nginx/conf.d/vps.conf "https://my.rzvpn.net/random/vps.conf"
+sed -i 's/apache/nginx/g' /etc/php-fpm.d/www.conf
+chmod -R +rx /home/vps
+service php-fpm restart
+service nginx restart
+
+# install openvpn
+wget -O /etc/openvpn/openvpn.tar "https://raw.github.com/choirulanam217/script/master/conf/openvpn-debian.tar"
+cd /etc/openvpn/
+tar xf openvpn.tar
+wget -O /etc/openvpn/1194.conf "https://raw.github.com/choirulanam217/script/master/conf/1194-centos.conf"
+if [ "$OS" == "x86_64" ]; then
+  wget -O /etc/openvpn/1194.conf "https://raw.github.com/choirulanam217/script/master/conf/1194-centos64.conf"
+fi
+wget -O /etc/iptables.up.rules "https://raw.github.com/choirulanam217/script/master/conf/iptables.up.rules"
+sed -i '$ i\iptables-restore < /etc/iptables.up.rules' /etc/rc.local
+sed -i '$ i\iptables-restore < /etc/iptables.up.rules' /etc/rc.d/rc.local
+MYIP=`curl -s ifconfig.me`;
+MYIP2="s/xxxxxxxxx/$MYIP/g";
+sed -i $MYIP2 /etc/iptables.up.rules;
+iptables-restore < /etc/iptables.up.rules
+sysctl -w net.ipv4.ip_forward=1
+sed -i 's/net.ipv4.ip_forward = 0/net.ipv4.ip_forward = 1/g' /etc/sysctl.conf
+service openvpn restart
+chkconfig openvpn on
+cd
+
+# configure openvpn client config
+cd /etc/openvpn/
+wget -O /etc/openvpn/1194-client.ovpn "http://script.fawzya.net/centos/open-vpn.conf"
+sed -i $MYIP2 /etc/openvpn/1194-client.ovpn;
+PASS=`cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 15 | head -n 1`;
+useradd -M -s /bin/false Fawzya
+echo "Fawzya:$PASS" | chpasswd
+echo "Fawzya" > pass.txt
+echo "$PASS" >> pass.txt
+tar cf client.tar 1194-client.ovpn pass.txt
+cp client.tar /home/vps/public_html/
+cp 1194-client.ovpn /home/vps/public_html/
+cd
+
+# install badvpn
+wget -O /usr/bin/badvpn-udpgw "http://script.hostingtermurah.net/repo/badvpn-udpgw"
+if [ "$OS" == "x86_64" ]; then
+  wget -O /usr/bin/badvpn-udpgw "http://script.hostingtermurah.net/repo/badvpn-udpgw64"
+fi
+sed -i '$ i\screen -AmdS badvpn badvpn-udpgw --listen-addr 127.0.0.1:7300' /etc/rc.local
+sed -i '$ i\screen -AmdS badvpn badvpn-udpgw --listen-addr 127.0.0.1:7300' /etc/rc.d/rc.local
+chmod +x /usr/bin/badvpn-udpgw
+screen -AmdS badvpn badvpn-udpgw --listen-addr 127.0.0.1:7300
+
+# install mrtg
+cd /etc/snmp/
+wget -O /etc/snmp/snmpd.conf "http://script.hostingtermurah.net/repo/snmpd.conf"
+wget -O /root/mrtg-mem.sh "http://script.hostingtermurah.net/repo/mrtg-mem.sh"
+chmod +x /root/mrtg-mem.sh
+service snmpd restart
+chkconfig snmpd on
+snmpwalk -v 1 -c public localhost | tail
+mkdir -p /home/vps/public_html/mrtg
+cfgmaker --zero-speed 100000000 --global 'WorkDir: /home/vps/public_html/mrtg' --output /etc/mrtg/mrtg.cfg public@localhost
+curl "http://script.hostingtermurah.net/repo/mrtg.conf" >> /etc/mrtg.cfg
+sed -i 's/WorkDir: \/var\/www\/mrtg/# WorkDir: \/var\/www\/mrtg/g' /etc/mrtg/mrtg.cfg
+sed -i 's/# Options\[_\]: growright, bits/Options\[_\]: growright/g' /etc/mrtg/mrtg.cfg
+indexmaker --output=/home/vps/public_html/mrtg/index.html /etc/mrtg/mrtg.cfg
+echo "0-59/5 * * * * root env LANG=C /usr/bin/mrtg /etc/mrtg/mrtg.cfg" > /etc/cron.d/mrtg
+LANG=C /usr/bin/mrtg /etc/mrtg/mrtg.cfg
+LANG=C /usr/bin/mrtg /etc/mrtg/mrtg.cfg
+LANG=C /usr/bin/mrtg /etc/mrtg/mrtg.cfg
+cd
+
+# install vnstat gui
+cd /home/vps/public_html/
+wget http://script.hostingtermurah.net/repo/vnstat_php_frontend-1.5.1.tar.gz
+tar xf vnstat_php_frontend-1.5.1.tar.gz
+rm vnstat_php_frontend-1.5.1.tar.gz
+mv vnstat_php_frontend-1.5.1 vnstat
+cd vnstat
+sed -i "s/\$iface_list = array('eth0', 'sixxs');/\$iface_list = array('eth0');/g" config.php
+sed -i "s/\$language = 'nl';/\$language = 'en';/g" config.php
+sed -i 's/Internal/Internet/g' config.php
+sed -i '/SixXS IPv6/d' config.php
+cd
+
+# setting port ssh
+sed -i '/Port 22/a Port 80' /etc/ssh/sshd_config
+sed -i 's/#Port 22/Port  22/g' /etc/ssh/sshd_config
+service sshd restart
+chkconfig sshd on
+
+# install dropbear
+yum -y install dropbear
+echo "OPTIONS=\"-p 443\"" > /etc/sysconfig/dropbear
+echo "/bin/false" >> /etc/shells
+service dropbear restart
+chkconfig dropbear on
+
+# install squid
+yum -y install squid
+wget -O /etc/squid/squid.conf "https://raw.githubusercontent.com/lanunquota/conf/master/squid-centos.conf"
+MYIP=`curl -s ifconfig.me`;
+MYIP2="s/xxxxxxxxx/$MYIP/g";
+sed -i $MYIP2 /etc/squid/squid.conf;
+chkconfig squid on
+service squid restart
+
+# install fail2ban
+yum -y install fail2ban
+service fail2ban restart
+chkconfig fail2ban on
+
+# remove unused
+yum -y remove sendmail;
+yum -y remove httpd;
+yum -y remove cyrus-sasl
+
+# download script
+cd /usr/bin
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/menu && chmod +x menu
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/badvpn-udpgw && chmod +x badvpn-udpgw
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/banned-user && chmod +x banned-user
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/basename && chmod +x basename
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/benchmark && chmod +x benchmark
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/bmon && chmod +x bmon
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/delete-user-expire && chmod +x delete-user-expire
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/disable-user-expire && chmod +x disable-user-expire
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/dropmon && chmod +x dropmon
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/re-drop && chmod +x re-drop
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/test-speed && chmod +x test-speed
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-add && chmod +x user-add
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-add-pptp && chmod +x user-add-pptp
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-del && chmod +x user-del
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-expire-list && chmod +x user-expire-list
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-gen && chmod +x user-gen
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-limit && chmod +x user-limit
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-list && chmod +x user-list
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-login && chmod +x user-login
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-pass && chmod +x user-pass
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-renew && chmod +x user-renew
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/users && chmod +x users
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/user-active-list && chmod +x user-active-list
+wget https://raw.githubusercontent.com/chunyen91/Ford_7752/master/cen6tool/test.py && chmod +x test.py
+cd
+
+# finalisasi
+chown -R nginx:nginx /home/vps/public_html
+service nginx start
+service php-fpm start
+service vnstat restart
+service openvpn restart
+service snmpd restart
+service sshd restart
+service dropbear restart
+service fail2ban restart
+service squid restart
+service webmin restart
+service crond start
+chkconfig crond on
+
+# info
+clear
+echo "Auto Installer by PerantauSepi (izam-lukman)" | tee log-install.txt
+echo "===============================================" | tee -a log-install.txt
+echo ""  | tee -a log-install.txt
+echo "Service"  | tee -a log-install.txt
+echo "-------"  | tee -a log-install.txt
+echo "Fail2Ban : [on]"  | tee -a log-install.txt
+echo "OpenSSH  : 80"  | tee -a log-install.txt
+echo "DropBear : 443"  | tee -a log-install.txt
+echo "Squid3   : 8080 (limit to IP SSH)"  | tee -a log-install.txt
+echo ""  | tee -a log-install.txt
+echo "Script"  | tee -a log-install.txt
+echo "------"  | tee -a log-install.txt
+echo "./user-login.sh"  | tee -a log-install.txt
+echo "./user-expired.sh"  | tee -a log-install.txt
+echo "./user-add.sh"  | tee -a log-install.txt
+echo "./user-trial.sh"  | tee -a log-install.txt
+echo "./user-limit.sh"  | tee -a log-install.txt
+echo ""  | tee -a log-install.txt
+echo "SILA REBOOT VPS ANDA ! shutdown -r now"  | tee -a log-install.txt
+echo ""  | tee -a log-install.txt
+echo "==============================================="  | tee -a log-install.txt
